@@ -17,13 +17,11 @@ jobs:
 
     steps:
       - checkout
-
       - run:
           name: Install PostgreSQL client
           command: |
             sudo apt-get update
             sudo apt-get install -y postgresql-client
-
       - run:
           name: Wait for PostgreSQL and Redis
           command: |
@@ -39,26 +37,21 @@ jobs:
               sleep 2
             done
             python -c "import socket; s=socket.create_connection(('127.0.0.1',6379),timeout=5); s.close()"
-
       - run:
           name: Install Python dependencies
           command: pip install -r requirements.txt
-
       - run:
           name: Run database migrations
           command: |
             export PGPASSWORD=parking_test_password
             psql -h 127.0.0.1 -U parking -d parking -v ON_ERROR_STOP=1 -f migrations/001_schema.sql
             psql -h 127.0.0.1 -U parking -d parking -v ON_ERROR_STOP=1 -f migrations/002_seed.sql
-
       - run:
           name: Lint
           command: ruff check app tests
-
       - run:
           name: Unit tests
           command: python -m pytest -v
-
       - run:
           name: API integration smoke test
           command: |
@@ -80,18 +73,19 @@ jobs:
   security_scan:
     docker:
       - image: cimg/base:stable
-
     steps:
       - checkout
-
       - run:
           name: Install Gitleaks
           command: |
+            set -e
             VERSION=8.24.3
-            curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tar.gz
+            curl --fail --show-error --location --retry 3 \
+              "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
+              -o /tmp/gitleaks.tar.gz
             tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
             sudo install /tmp/gitleaks /usr/local/bin/gitleaks
-
+            gitleaks version
       - run:
           name: Scan repository for secrets
           command: gitleaks detect --source . --no-git --redact
@@ -99,11 +93,9 @@ jobs:
   build_and_push:
     docker:
       - image: cimg/base:stable
-
     steps:
       - checkout
       - setup_remote_docker
-
       - run:
           name: Select image tags
           command: |
@@ -117,18 +109,15 @@ jobs:
             esac
             echo "export IMAGE_TAG=$TAG" >> "$BASH_ENV"
             echo "export SHORT_SHA=$SHORT_SHA" >> "$BASH_ENV"
-
       - run:
           name: Log in to Docker Hub
           command: |
             echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USER" --password-stdin
-
       - run:
           name: Build Docker image
           command: |
             docker build -t "$DOCKERHUB_USER/parking-lot-python:$IMAGE_TAG" .
             docker tag "$DOCKERHUB_USER/parking-lot-python:$IMAGE_TAG" "$DOCKERHUB_USER/parking-lot-python:$CIRCLE_BRANCH-$SHORT_SHA"
-
       - run:
           name: Push image tags
           command: |
@@ -142,12 +131,10 @@ workflows:
           filters:
             branches:
               only: main
-
       - security_scan:
           filters:
             branches:
               only: main
-
       - build_and_push:
           requires:
             - test
