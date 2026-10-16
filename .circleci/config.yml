@@ -1,0 +1,166 @@
+
+version: 2.1
+
+jobs:
+  test:
+    docker:
+      - image: cimg/python:3.12
+        environment:
+          DATABASE_URL: postgresql://parking:parking_test_password@127.0.0.1:5432/parking
+          REDIS_URL: redis://127.0.0.1:6379/0
+      - image: postgres:16-alpine
+        environment:
+          POSTGRES_USER: parking
+          POSTGRES_PASSWORD: parking_test_password
+          POSTGRES_DB: parking
+      - image: redis:7-alpine
+
+    steps:
+      - checkout
+
+      - run:
+          name: Install PostgreSQL client
+          command: |
+            sudo apt-get update
+            sudo apt-get install -y postgresql-client
+
+      - run:
+          name: Wait for PostgreSQL and Redis
+          command: |
+            set -e
+            for i in $(seq 1 30); do
+              if pg_isready -h 127.0.0.1 -p 5432 -U parking; then
+                break
+              fi
+              if [ "$i" -eq 30 ]; then
+                echo "PostgreSQL failed to start"
+                exit 1
+              fi
+              sleep 2
+            done
+            python -c "import socket; s=socket.create_connection(('127.0.0.1',6379),timeout=5); s.close()"
+
+      - run:
+          name: Install Python dependencies
+          command: pip install -r requirements.txt
+
+      - run:
+          name: Run database migrations
+          command: |
+            export PGPASSWORD=parking_test_password
+            psql -h 127.0.0.1 -U parking -d parking -v ON_ERROR_STOP=1 -f migrations/001_schema.sql
+            psql -h 127.0.0.1 -U parking -d parking -v ON_ERROR_STOP=1 -f migrations/002_seed.sql
+
+      - run:
+          name: Lint
+          command: ruff check app tests
+
+      - run:
+          name: Unit tests
+          command: python -m pytest -v
+
+      - run:
+          name: API integration smoke test
+          command: |
+            uvicorn app.main:app --host 0.0.0.0 --port 8080 &
+            APP_PID=$!
+            trap 'kill "$APP_PID" 2>/dev/null || true' EXIT
+            for i in $(seq 1 30); do
+              if python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=2)" 2>/dev/null; then
+                break
+              fi
+              if [ "$i" -eq 30 ]; then
+                echo "API failed to start"
+                exit 1
+              fi
+              sleep 2
+            done
+            python -c "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:8080/health')); print(d); assert d.get('status') == 'ok' and d.get('postgres') is True and d.get('redis') is True"
+
+  security_scan:
+    docker:
+      - image: cimg/base:stable
+
+    steps:
+      - checkout
+
+      - run:
+          name: Install Gitleaks
+          command: |
+            VERSION=8.24.3
+            curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tar.gz
+            tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+            sudo install /tmp/gitleaks /usr/local/bin/gitleaks
+
+      - run:
+          name: Scan repository for secrets
+          command: gitleaks detect --source . --no-git --redact
+
+  build_and_push:
+    docker:
+      - image: cimg/base:stable
+
+    steps:
+      - checkout
+      - setup_remote_docker
+
+      - run:
+          name: Select image tags
+          command: |
+            set -e
+            SHORT_SHA=$(echo "$CIRCLE_SHA1" | cut -c1-7)
+            case "$CIRCLE_BRANCH" in
+              main) TAG=qa ;;
+              staging) TAG=stage ;;
+              prod) TAG=prod ;;
+              *) echo "Unsupported publishing branch: $CIRCLE_BRANCH"; exit 1 ;;
+            esac
+            echo "export IMAGE_TAG=$TAG" >> "$BASH_ENV"
+            echo "export SHORT_SHA=$SHORT_SHA" >> "$BASH_ENV"
+
+      - run:
+          name: Log in to Docker Hub
+          command: |
+            echo "$DOCKERHUB_TOKEN" | docker login -u "$DOCKERHUB_USER" --password-stdin
+
+      - run:
+          name: Build Docker image
+          command: |
+            docker build -t "$DOCKERHUB_USER/parking-lot-python:$IMAGE_TAG" .
+            docker tag "$DOCKERHUB_USER/parking-lot-python:$IMAGE_TAG" "$DOCKERHUB_USER/parking-lot-python:$CIRCLE_BRANCH-$SHORT_SHA"
+
+      - run:
+          name: Push image tags
+          command: |
+            docker push "$DOCKERHUB_USER/parking-lot-python:$IMAGE_TAG"
+            docker push "$DOCKERHUB_USER/parking-lot-python:$CIRCLE_BRANCH-$SHORT_SHA"
+
+workflows:
+  main_pipeline:
+    jobs:
+      - test:
+          filters:
+            branches:
+              only: main
+
+      - security_scan:
+          filters:
+            branches:
+              only: main
+
+      - build_and_push:
+          requires:
+            - test
+            - security_scan
+          filters:
+            branches:
+              only: main
+
+  staging_prod_publish:
+    jobs:
+      - build_and_push:
+          filters:
+            branches:
+              only:
+                - staging
+                - prod
