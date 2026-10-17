@@ -30,7 +30,7 @@ jobs:
               if [ "$i" -eq 30 ]; then echo "PostgreSQL failed to start"; exit 1; fi
               sleep 2
             done
-            python -c "import socket; s=socket.create_connection(('127.0.0.1',6379),timeout=3); s.close()"
+            python -c "import socket; s=socket.create_connection(('127.0.0.1',6379),timeout=5); s.close()"
       - run:
           name: Install Python dependencies
           command: pip install -r requirements.txt
@@ -53,8 +53,13 @@ jobs:
             APP_PID=$!
             trap 'kill "$APP_PID" 2>/dev/null || true' EXIT
             for i in $(seq 1 30); do
-              if python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=2)" 2>/dev/null; then break; fi
-              if [ "$i" -eq 30 ]; then echo "API failed to start"; exit 1; fi
+              if python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=2)" 2>/dev/null; then
+                break
+              fi
+              if [ "$i" -eq 30 ]; then
+                echo "API failed to start"
+                exit 1
+              fi
               sleep 2
             done
             python -c "import json,urllib.request; d=json.load(urllib.request.urlopen('http://127.0.0.1:8080/health')); print(d); assert d.get('status') == 'ok' and d.get('postgres') is True and d.get('redis') is True"
@@ -67,8 +72,14 @@ jobs:
       - run:
           name: Install Gitleaks
           command: |
-            curl -sSfL https://raw.githubusercontent.com/gitleaks/gitleaks/master/install.sh -o /tmp/install-gitleaks.sh
-            sudo sh /tmp/install-gitleaks.sh -b /usr/local/bin
+            set -e
+            VERSION=8.24.3
+            curl --fail --show-error --location --retry 3 \
+              "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" \
+              -o /tmp/gitleaks.tar.gz
+            tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+            sudo install /tmp/gitleaks /usr/local/bin/gitleaks
+            gitleaks version
       - run:
           name: Scan repository for secrets
           command: gitleaks detect --source . --no-git --redact
