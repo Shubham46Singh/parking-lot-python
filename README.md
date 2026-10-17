@@ -1,3 +1,6 @@
+## Demo Verification
+
+This section documents the project verification workflow using CircleCI, Docker Compose, and Kubernetes.
 # Parking Lot Management
 
 **Language:** Python (FastAPI) &nbsp;|&nbsp; **Needs:** Postgres + Redis
