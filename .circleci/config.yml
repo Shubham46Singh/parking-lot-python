@@ -14,7 +14,6 @@ jobs:
           POSTGRES_PASSWORD: parking_test_password
           POSTGRES_DB: parking
       - image: redis:7-alpine
-
     steps:
       - checkout
       - run:
@@ -23,17 +22,12 @@ jobs:
             sudo apt-get update
             sudo apt-get install -y postgresql-client
       - run:
-          name: Wait for PostgreSQL and Redis
+          name: Wait for services
           command: |
             set -e
             for i in $(seq 1 30); do
-              if pg_isready -h 127.0.0.1 -p 5432 -U parking; then
-                break
-              fi
-              if [ "$i" -eq 30 ]; then
-                echo "PostgreSQL failed to start"
-                exit 1
-              fi
+              if pg_isready -h 127.0.0.1 -p 5432 -U parking; then break; fi
+              if [ "$i" -eq 30 ]; then echo "PostgreSQL failed to start"; exit 1; fi
               sleep 2
             done
             python -c "import socket; s=socket.create_connection(('127.0.0.1',6379),timeout=5); s.close()"
