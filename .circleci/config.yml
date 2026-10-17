@@ -124,11 +124,15 @@ workflows:
       - test:
           filters:
             branches:
-              only: main
+              only:
+                - main
+                - feature/demo-pipeline
       - security_scan:
           filters:
             branches:
-              only: main
+              only:
+                - main
+                - feature/demo-pipeline
       - build_and_push:
           requires:
             - test
